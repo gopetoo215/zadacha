@@ -1,0 +1,177 @@
+import javax.swing.*;
+import java.awt.*;
+import java.awt.datatransfer.DataFlavor;
+import java.io.*;
+import java.security.MessageDigest;
+import java.util.List;
+
+public class HashCalculator extends JFrame {
+
+  private JProgressBar progressBar;
+  private JTextArea resultArea;
+  private JLabel statusLabel;
+  private JButton cancelButton;
+
+  private HashWorker currentWorker;
+
+  public HashCalculator() {
+    setTitle("Hash Calculator - MD5 / SHA-256");
+    setSize(700, 450);
+    setDefaultCloseOperation(EXIT_ON_CLOSE);
+    setLocationRelativeTo(null);
+
+    initUI();
+  }
+
+  private void initUI() {
+
+    JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
+    mainPanel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
+
+    JLabel dropLabel = new JLabel("Drag & Drop файл тук (>2GB supported)", SwingConstants.CENTER);
+    dropLabel.setBorder(BorderFactory.createDashedBorder(Color.GRAY));
+    dropLabel.setPreferredSize(new Dimension(600, 80));
+
+    progressBar = new JProgressBar(0, 100);
+    progressBar.setStringPainted(true);
+
+    statusLabel = new JLabel("Waiting for file...");
+
+    resultArea = new JTextArea();
+    resultArea.setEditable(false);
+
+    cancelButton = new JButton("Cancel");
+    cancelButton.setEnabled(false);
+
+    cancelButton.addActionListener(e -> {
+      if (currentWorker != null && !currentWorker.isDone()) {
+        currentWorker.cancel(true);
+      }
+    });
+
+    JPanel topPanel = new JPanel(new BorderLayout());
+    topPanel.add(dropLabel, BorderLayout.CENTER);
+
+    JPanel bottomPanel = new JPanel(new BorderLayout(10, 10));
+    bottomPanel.add(progressBar, BorderLayout.NORTH);
+    bottomPanel.add(statusLabel, BorderLayout.CENTER);
+    bottomPanel.add(cancelButton, BorderLayout.SOUTH);
+
+    mainPanel.add(topPanel, BorderLayout.NORTH);
+    mainPanel.add(new JScrollPane(resultArea), BorderLayout.CENTER);
+    mainPanel.add(bottomPanel, BorderLayout.SOUTH);
+
+    add(mainPanel);
+
+    // Drag & Drop
+    dropLabel.setTransferHandler(new TransferHandler() {
+      @Override
+      public boolean canImport(TransferSupport support) {
+        return support.isDataFlavorSupported(DataFlavor.javaFileListFlavor);
+      }
+
+      @Override
+      public boolean importData(TransferSupport support) {
+        try {
+          List<File> files = (List<File>) support.getTransferable()
+                  .getTransferData(DataFlavor.javaFileListFlavor);
+
+          if (!files.isEmpty()) {
+            startHashing(files.get(0));
+            return true;
+          }
+        } catch (Exception ex) {
+          ex.printStackTrace();
+        }
+        return false;
+      }
+    });
+  }
+
+  private void startHashing(File file) {
+
+    resultArea.setText("");
+    statusLabel.setText("Processing: " + file.getName());
+    progressBar.setValue(0);
+    cancelButton.setEnabled(true);
+
+    currentWorker = new HashWorker(file);
+    currentWorker.execute();
+  }
+
+  private class HashWorker extends SwingWorker<String, Integer> {
+
+    private final File file;
+
+    public HashWorker(File file) {
+      this.file = file;
+    }
+
+    @Override
+    protected String doInBackground() throws Exception {
+
+      MessageDigest md5 = MessageDigest.getInstance("MD5");
+      MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+
+      long totalBytes = file.length();
+      long readBytes = 0;
+
+      try (InputStream is = new BufferedInputStream(new FileInputStream(file))) {
+
+        byte[] buffer = new byte[8 * 1024 * 1024]; // 8MB chunks
+        int bytesRead;
+
+        while ((bytesRead = is.read(buffer)) != -1) {
+
+          if (isCancelled()) {
+            return "Cancelled";
+          }
+
+          md5.update(buffer, 0, bytesRead);
+          sha256.update(buffer, 0, bytesRead);
+
+          readBytes += bytesRead;
+          int progress = (int) ((readBytes * 100) / totalBytes);
+          setProgress(progress);
+        }
+      }
+
+      return "File: " + file.getName() +
+              "\nSize: " + (file.length() / (1024 * 1024)) + " MB" +
+              "\n\nMD5:\n" + toHex(md5.digest()) +
+              "\n\nSHA-256:\n" + toHex(sha256.digest());
+    }
+
+    @Override
+    protected void process(List<Integer> chunks) {
+      for (int value : chunks) {
+        progressBar.setValue(value);
+      }
+    }
+
+    @Override
+    protected void done() {
+      try {
+        resultArea.setText(get());
+        statusLabel.setText("Finished.");
+      } catch (Exception e) {
+        resultArea.setText("Error: " + e.getMessage());
+      }
+      cancelButton.setEnabled(false);
+    }
+
+    private String toHex(byte[] bytes) {
+      StringBuilder sb = new StringBuilder();
+      for (byte b : bytes) {
+        sb.append(String.format("%02x", b));
+      }
+      return sb.toString();
+    }
+  }
+
+  public static void main(String[] args) {
+    SwingUtilities.invokeLater(() -> {
+      new HashCalculator().setVisible(true);
+    });
+  }
+}
